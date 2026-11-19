@@ -14,6 +14,17 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Inspect input files
+        run: |
+          echo "Branch: $GITHUB_REF"
+          echo "Commit: $GITHUB_SHA"
+          echo "Repository files:"
+          ls -la
+          echo "Studio files:"
+          find studio -maxdepth 3 -type f -print
+          echo "Audio directory:"
+          ls -la studio/audio
+
       - name: Install FFmpeg
         run: |
           sudo apt-get update
