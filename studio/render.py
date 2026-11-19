@@ -2,9 +2,11 @@
 import subprocess
 import tempfile
 import sys
+import json
 from pathlib import Path
+from fractions import Fraction
 # ==========================================
-# BEAST MODE V1.2 — CINEMATIC COLOR ENGINE
+# BEAST MODE V1.3 — AUTOMATIC QUALITY CONTROL
 # ==========================================
 ROOT = Path(__file__).resolve().parent
 INPUT_DIR = ROOT / "input"
@@ -27,12 +29,17 @@ COLOR_BRIGHTNESS = 0.01
 COLOR_SATURATION = 1.08
 COLOR_GAMMA = 1.02
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v"}
+# QUALITY CONTROL
+DURATION_TOLERANCE = 1.5
 # ==========================================
 # COMMAND RUNNER
 # ==========================================
 def run(command):
     print("\nRunning:", " ".join(map(str, command)))
-    subprocess.run(command, check=True)
+    subprocess.run(
+        command,
+        check=True
+    )
 # ==========================================
 # CHECK REQUIREMENTS
 # ==========================================
@@ -52,38 +59,35 @@ def check_ffmpeg():
 # ==========================================
 # VIDEO INFORMATION
 # ==========================================
-def get_duration(path):
+def get_media_info(path):
     result = subprocess.run(
         [
             "ffprobe",
             "-v", "error",
-            "-show_entries", "format=duration",
-            "-of", "default=noprint_wrappers=1:nokey=1",
+            "-show_streams",
+            "-show_format",
+            "-of", "json",
             str(path)
         ],
         capture_output=True,
         text=True,
         check=True
     )
-    duration = float(result.stdout.strip())
+    return json.loads(result.stdout)
+def get_duration(path):
+    info = get_media_info(path)
+    duration = float(
+        info["format"]["duration"]
+    )
     if duration <= 0:
         raise RuntimeError("Invalid video duration.")
     return duration
 def has_audio(path):
-    result = subprocess.run(
-        [
-            "ffprobe",
-            "-v", "error",
-            "-select_streams", "a:0",
-            "-show_entries", "stream=index",
-            "-of", "csv=p=0",
-            str(path)
-        ],
-        capture_output=True,
-        text=True,
-        check=True
+    info = get_media_info(path)
+    return any(
+        stream.get("codec_type") == "audio"
+        for stream in info.get("streams", [])
     )
-    return bool(result.stdout.strip())
 # ==========================================
 # CINEMATIC VIDEO NORMALIZATION
 # ==========================================
@@ -138,14 +142,19 @@ def normalize_clip(source, destination):
 # CLIP ORDER
 # ==========================================
 def create_concat_file(clips, concat_file):
-    with concat_file.open("w", encoding="utf-8") as file:
+    with concat_file.open(
+        "w",
+        encoding="utf-8"
+    ) as file:
         for clip in clips:
             safe_path = (
                 str(clip)
                 .replace("\\", "/")
                 .replace("'", "'\\''")
             )
-            file.write(f"file '{safe_path}'\n")
+            file.write(
+                f"file '{safe_path}'\n"
+            )
 # ==========================================
 # AUDIO MIXING + FINAL VIDEO
 # ==========================================
@@ -199,6 +208,118 @@ def render_final_video(video_file, duration):
     ]
     run(command)
 # ==========================================
+# AUTOMATIC QUALITY CONTROL
+# ==========================================
+def quality_control(expected_duration):
+    print("\n================================")
+    print("BEAST MODE AUTOMATIC QC")
+    print("================================")
+    results = []
+    def report(name, passed, detail):
+        status = "PASS" if passed else "FAIL"
+        results.append(passed)
+        print(
+            f"[{status}] {name}: {detail}"
+        )
+    if not OUTPUT_FILE.is_file():
+        raise RuntimeError(
+            "QC FAILED: Output file does not exist."
+        )
+    file_size = OUTPUT_FILE.stat().st_size
+    report(
+        "File existence",
+        file_size > 0,
+        f"{file_size / (1024 * 1024):.2f} MB"
+    )
+    info = get_media_info(OUTPUT_FILE)
+    streams = info.get("streams", [])
+    video_streams = [
+        stream for stream in streams
+        if stream.get("codec_type") == "video"
+    ]
+    audio_streams = [
+        stream for stream in streams
+        if stream.get("codec_type") == "audio"
+    ]
+    if not video_streams:
+        raise RuntimeError(
+            "QC FAILED: No video stream found."
+        )
+    video = video_streams[0]
+    audio_present = len(audio_streams) > 0
+    report(
+        "Audio stream",
+        audio_present,
+        "Audio detected" if audio_present else "No audio found"
+    )
+    resolution_ok = (
+        video.get("width") == WIDTH
+        and video.get("height") == HEIGHT
+    )
+    report(
+        "Resolution",
+        resolution_ok,
+        f"{video.get('width')}x{video.get('height')}"
+    )
+    frame_rate = Fraction(
+        video.get("avg_frame_rate", "0/1")
+    )
+    fps_ok = float(frame_rate) == FPS
+    report(
+        "Frame rate",
+        fps_ok,
+        f"{float(frame_rate):.2f} FPS"
+    )
+    output_duration = float(
+        info["format"]["duration"]
+    )
+    duration_difference = abs(
+        output_duration - expected_duration
+    )
+    duration_ok = (
+        duration_difference <= DURATION_TOLERANCE
+    )
+    report(
+        "Video duration",
+        duration_ok,
+        (
+            f"{output_duration:.2f}s "
+            f"(expected {expected_duration:.2f}s)"
+        )
+    )
+    print("\nChecking file decoding...")
+    decode_result = subprocess.run(
+        [
+            "ffmpeg",
+            "-v", "error",
+            "-i", str(OUTPUT_FILE),
+            "-f", "null",
+            "-"
+        ],
+        capture_output=True,
+        text=True
+    )
+    decode_ok = decode_result.returncode == 0
+    report(
+        "Media decoding",
+        decode_ok,
+        "File decoded successfully"
+        if decode_ok
+        else decode_result.stderr[-1000:]
+    )
+    print("\n================================")
+    if all(results):
+        print("QC RESULT: PASS")
+        print("BEAST MODE OUTPUT VERIFIED")
+    else:
+        print("QC RESULT: FAIL")
+        print("Please inspect the failed checks.")
+        raise RuntimeError(
+            "Automatic Quality Control failed."
+        )
+    print("================================")
+    return output_duration
+# ==========================================
 # MAIN ENGINE
 # ==========================================
 def main():
@@ -231,30 +352,49 @@ def main():
             "Music file is missing. "
             "Add music.mp3 to studio/audio/"
         )
-    print(f"\nFound {len(clips)} video clip(s).")
+    print(
+        f"\nFound {len(clips)} video clip(s)."
+    )
     print("\nCLIP ORDER:")
     for index, clip in enumerate(clips, start=1):
-        print(f"{index}. {clip.name}")
+        print(
+            f"{index}. {clip.name}"
+        )
     print("\nMusic file found.")
     print("\nCINEMATIC COLOR SETTINGS:")
     print(f"Contrast: {COLOR_CONTRAST}")
     print(f"Brightness: {COLOR_BRIGHTNESS}")
     print(f"Saturation: {COLOR_SATURATION}")
     print(f"Gamma: {COLOR_GAMMA}")
+    expected_duration = sum(
+        get_duration(clip)
+        for clip in clips
+    )
+    print(
+        f"\nExpected total duration: "
+        f"{expected_duration:.2f} seconds"
+    )
     print("\nPreparing cinematic video...")
     with tempfile.TemporaryDirectory() as temp:
         temp_dir = Path(temp)
         normalized_clips = []
-        for index, clip in enumerate(clips, start=1):
+        for index, clip in enumerate(
+            clips,
+            start=1
+        ):
             destination = (
                 temp_dir / f"clip_{index:03d}.mp4"
             )
-            print(f"\nNormalizing: {clip.name}")
+            print(
+                f"\nNormalizing: {clip.name}"
+            )
             normalize_clip(
                 clip,
                 destination
             )
-            normalized_clips.append(destination)
+            normalized_clips.append(
+                destination
+            )
         concat_file = temp_dir / "concat.txt"
         create_concat_file(
             normalized_clips,
@@ -270,36 +410,40 @@ def main():
             "-c", "copy",
             str(joined_video)
         ])
-        duration = get_duration(joined_video)
+        duration = get_duration(
+            joined_video
+        )
         print(
             f"\nTotal video duration: {duration:.2f} seconds"
         )
-        print("\nMixing original audio with background music...")
+        print(
+            "\nMixing original audio with background music..."
+        )
         render_final_video(
             joined_video,
             duration
         )
-    if (
-        not OUTPUT_FILE.is_file()
-        or OUTPUT_FILE.stat().st_size == 0
-    ):
-        raise RuntimeError(
-            "Final video was not created correctly."
-        )
+    # AUTOMATIC QUALITY CONTROL
+    final_duration = quality_control(
+        expected_duration
+    )
     print("\n================================")
-    print("BEAST MODE RENDER COMPLETE")
+    print("BEAST MODE V1.3 RENDER COMPLETE")
     print("================================")
     print(f"Output: {OUTPUT_FILE}")
-    print(f"Duration: {duration:.2f} seconds")
+    print(
+        f"Duration: {final_duration:.2f} seconds"
+    )
     print("Resolution: 1080x1920")
     print("Frame rate: 30 FPS")
-    print("Original audio: Preserved")
-    print("Background music: Included")
+    print("Original audio: Preserved where available")
+    print("Background music: Mixed")
     print("Cinematic color grading: Enabled")
     print(
         f"Watermark: "
         f"{'Included' if WATERMARK_FILE.exists() else 'Disabled'}"
     )
+    print("Automatic Quality Control: PASS")
 # ==========================================
 # START ENGINE
 # ==========================================
