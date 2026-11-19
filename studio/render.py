@@ -3,6 +3,9 @@ import subprocess
 import tempfile
 import sys
 from pathlib import Path
+# ==========================================
+# BEAST MODE V1.2 — CINEMATIC COLOR ENGINE
+# ==========================================
 ROOT = Path(__file__).resolve().parent
 INPUT_DIR = ROOT / "input"
 AUDIO_DIR = ROOT / "audio"
@@ -11,15 +14,28 @@ OUTPUT_DIR = ROOT / "output"
 OUTPUT_FILE = OUTPUT_DIR / "BEAST-MODE-FINAL.mp4"
 MUSIC_FILE = AUDIO_DIR / "music.mp3"
 WATERMARK_FILE = ASSETS_DIR / "watermark.png"
+# VIDEO SETTINGS
 WIDTH = 1080
 HEIGHT = 1920
 FPS = 30
+# AUDIO SETTINGS
 MUSIC_VOLUME = 0.22
 ORIGINAL_AUDIO_VOLUME = 1.0
+# CINEMATIC COLOR SETTINGS
+COLOR_CONTRAST = 1.06
+COLOR_BRIGHTNESS = 0.01
+COLOR_SATURATION = 1.08
+COLOR_GAMMA = 1.02
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v"}
+# ==========================================
+# COMMAND RUNNER
+# ==========================================
 def run(command):
     print("\nRunning:", " ".join(map(str, command)))
     subprocess.run(command, check=True)
+# ==========================================
+# CHECK REQUIREMENTS
+# ==========================================
 def check_ffmpeg():
     for executable in ("ffmpeg", "ffprobe"):
         try:
@@ -30,7 +46,12 @@ def check_ffmpeg():
                 check=True
             )
         except (FileNotFoundError, subprocess.CalledProcessError):
-            raise RuntimeError(f"{executable} is not installed.")
+            raise RuntimeError(
+                f"{executable} is not installed."
+            )
+# ==========================================
+# VIDEO INFORMATION
+# ==========================================
 def get_duration(path):
     result = subprocess.run(
         [
@@ -63,6 +84,9 @@ def has_audio(path):
         check=True
     )
     return bool(result.stdout.strip())
+# ==========================================
+# CINEMATIC VIDEO NORMALIZATION
+# ==========================================
 def normalize_clip(source, destination):
     duration = get_duration(source)
     video_filter = (
@@ -70,7 +94,11 @@ def normalize_clip(source, destination):
         "force_original_aspect_ratio=increase,"
         f"crop={WIDTH}:{HEIGHT},"
         f"fps={FPS},"
-        "setsar=1"
+        "setsar=1,"
+        f"eq=contrast={COLOR_CONTRAST}:"
+        f"brightness={COLOR_BRIGHTNESS}:"
+        f"saturation={COLOR_SATURATION}:"
+        f"gamma={COLOR_GAMMA}"
     )
     command = [
         "ffmpeg", "-y",
@@ -81,15 +109,16 @@ def normalize_clip(source, destination):
             "-map", "0:v:0",
             "-map", "0:a:0",
             "-vf", video_filter,
-            "-af", "aresample=48000,apad",
+            "-af", "aresample=48000,apad"
         ]
     else:
         command += [
             "-f", "lavfi",
-            "-i", "anullsrc=channel_layout=stereo:sample_rate=48000",
+            "-i",
+            "anullsrc=channel_layout=stereo:sample_rate=48000",
             "-map", "0:v:0",
             "-map", "1:a:0",
-            "-vf", video_filter,
+            "-vf", video_filter
         ]
     command += [
         "-t", str(duration),
@@ -105,11 +134,21 @@ def normalize_clip(source, destination):
         str(destination)
     ]
     run(command)
+# ==========================================
+# CLIP ORDER
+# ==========================================
 def create_concat_file(clips, concat_file):
     with concat_file.open("w", encoding="utf-8") as file:
         for clip in clips:
-            safe_path = str(clip).replace("\\", "/").replace("'", "'\\''")
+            safe_path = (
+                str(clip)
+                .replace("\\", "/")
+                .replace("'", "'\\''")
+            )
             file.write(f"file '{safe_path}'\n")
+# ==========================================
+# AUDIO MIXING + FINAL VIDEO
+# ==========================================
 def render_final_video(video_file, duration):
     fade_duration = min(2.0, duration)
     fade_start = max(0.0, duration - fade_duration)
@@ -119,7 +158,8 @@ def render_final_video(video_file, duration):
         f"atrim=duration={duration},"
         "asetpts=PTS-STARTPTS[music];"
         "[original][music]"
-        "amix=inputs=2:duration=first:dropout_transition=2:normalize=0,"
+        "amix=inputs=2:duration=first:"
+        "dropout_transition=2:normalize=0,"
         "alimiter=limit=0.95,"
         f"afade=t=out:st={fade_start}:d={fade_duration}"
         "[audio]"
@@ -158,6 +198,9 @@ def render_final_video(video_file, duration):
         str(OUTPUT_FILE)
     ]
     run(command)
+# ==========================================
+# MAIN ENGINE
+# ==========================================
 def main():
     check_ffmpeg()
     for directory in (
@@ -166,7 +209,10 @@ def main():
         ASSETS_DIR,
         OUTPUT_DIR
     ):
-        directory.mkdir(parents=True, exist_ok=True)
+        directory.mkdir(
+            parents=True,
+            exist_ok=True
+        )
     clips = sorted(
         (
             path for path in INPUT_DIR.iterdir()
@@ -177,25 +223,37 @@ def main():
     )
     if not clips:
         raise RuntimeError(
-            "No video clips found. Add MP4 or MOV files to studio/input/"
+            "No video clips found. "
+            "Add MP4 or MOV files to studio/input/"
         )
     if not MUSIC_FILE.is_file():
         raise RuntimeError(
-            "Music file is missing. Add music.mp3 to studio/audio/"
+            "Music file is missing. "
+            "Add music.mp3 to studio/audio/"
         )
     print(f"\nFound {len(clips)} video clip(s).")
-    print("Music file found.")
     print("\nCLIP ORDER:")
     for index, clip in enumerate(clips, start=1):
         print(f"{index}. {clip.name}")
-    print("\nPreparing vertical video...")
+    print("\nMusic file found.")
+    print("\nCINEMATIC COLOR SETTINGS:")
+    print(f"Contrast: {COLOR_CONTRAST}")
+    print(f"Brightness: {COLOR_BRIGHTNESS}")
+    print(f"Saturation: {COLOR_SATURATION}")
+    print(f"Gamma: {COLOR_GAMMA}")
+    print("\nPreparing cinematic video...")
     with tempfile.TemporaryDirectory() as temp:
         temp_dir = Path(temp)
         normalized_clips = []
         for index, clip in enumerate(clips, start=1):
-            destination = temp_dir / f"clip_{index:03d}.mp4"
+            destination = (
+                temp_dir / f"clip_{index:03d}.mp4"
+            )
             print(f"\nNormalizing: {clip.name}")
-            normalize_clip(clip, destination)
+            normalize_clip(
+                clip,
+                destination
+            )
             normalized_clips.append(destination)
         concat_file = temp_dir / "concat.txt"
         create_concat_file(
@@ -213,10 +271,18 @@ def main():
             str(joined_video)
         ])
         duration = get_duration(joined_video)
-        print(f"\nVideo duration: {duration:.2f} seconds")
+        print(
+            f"\nTotal video duration: {duration:.2f} seconds"
+        )
         print("\nMixing original audio with background music...")
-        render_final_video(joined_video, duration)
-    if not OUTPUT_FILE.is_file() or OUTPUT_FILE.stat().st_size == 0:
+        render_final_video(
+            joined_video,
+            duration
+        )
+    if (
+        not OUTPUT_FILE.is_file()
+        or OUTPUT_FILE.stat().st_size == 0
+    ):
         raise RuntimeError(
             "Final video was not created correctly."
         )
@@ -228,11 +294,21 @@ def main():
     print("Resolution: 1080x1920")
     print("Frame rate: 30 FPS")
     print("Original audio: Preserved")
-    print(f"Music volume: {MUSIC_VOLUME}")
-    print(f"Watermark: {'Included' if WATERMARK_FILE.exists() else 'Disabled'}")
+    print("Background music: Included")
+    print("Cinematic color grading: Enabled")
+    print(
+        f"Watermark: "
+        f"{'Included' if WATERMARK_FILE.exists() else 'Disabled'}"
+    )
+# ==========================================
+# START ENGINE
+# ==========================================
 if __name__ == "__main__":
     try:
         main()
     except Exception as error:
-        print(f"\nERROR: {error}", file=sys.stderr)
+        print(
+            f"\nERROR: {error}",
+            file=sys.stderr
+        )
         sys.exit(1)
