@@ -12,7 +12,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Inspect input files
         run: |
@@ -37,7 +37,7 @@ jobs:
         run: python3 studio/render.py
 
       - name: Upload final MP4
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: BEAST-MODE-FINAL
           path: studio/output/BEAST-MODE-FINAL.mp4
